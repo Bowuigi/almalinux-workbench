@@ -1,0 +1,38 @@
+FROM almalinux:10.1
+VOLUME /build /result
+
+# Enable required repos
+RUN dnf -y install epel-release; \
+    crb enable; \
+    dnf -y update;
+
+# Install build-time dependencies for linphone-desktop
+RUN dnf -y install \
+      git diffutils cmake ninja-build meson \
+      gcc gcc-c++ yasm nasm doxygen \
+      libv4l-devel glew-devel alsa-lib-devel libXext-devel \
+      qt6-qtbase-devel qt6-qtquick3d-devel qt6-qtmultimedia-devel qt6-qtshadertools-devel qt6-qtnetworkauth-devel qt6-qtlanguageserver-devel qt6-qttools-devel qt6-qtsvg-devel qt6-linguist \
+      python3 python3-pip python3-six; \
+    pip install pystache;
+
+# Clone the whole repo. Retries automatically
+RUN until git clone https://gitlab.linphone.org/BC/public/linphone-desktop.git /build; do sleep 5; done;
+RUN cd /build; until git submodule update --init --recursive; do sleep 5; done;
+
+# Force cmake to use Qt6 6.9.X (may break on newer versions)
+RUN cd /build/linphone-desktop; \
+    sed -i 's/^if(${Qt6_VERSION} VERSION_LESS "6.10.0")$/^if(${Qt6_VERSION} VERSION_LESS "6.9.0") # Was 6.10.0$/';
+
+# Build configuration
+RUN mkdir /build/linphone-desktop/build; \
+    cd /build/linphone-desktop/build; \
+    cmake .. -DENABLE_GPL_THIRD_PARTIES=YES -DENABLE_ALSA=YES -DENABLE_VIDEO=YES -DCMAKE_BUILD_PARALLEL_LEVEL=$(nproc) -DCMAKE_BUILD_TYPE=RelWithDebInfo -B .;
+
+# Compilation and general cleanup
+RUN cmake --build . --parallel $(nproc) --config RelWithDebInfo; \
+    cmake --install .;
+
+# Package extraction (WIP)
+RUN cp -rv OUTPUT/bin OUTPUT/lib64 OUTPUT/share /result; \
+    rm -rv /result/lib64/pkgconfig /result/lib64/cmake;
+CMD ["sh"]
