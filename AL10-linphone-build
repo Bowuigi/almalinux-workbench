@@ -1,38 +1,57 @@
-FROM almalinux:10.1
-VOLUME /build /result
+# Run the following to get a tar file in ./linphone-build-result.tar with just the required files (minus runtime deps):
+# $ podman build -f AL10-linphone-build . -o type=tar,dest=./linphone-build-result.tar
+FROM almalinux:10.1 AS starter
 
 # Enable required repos
 RUN dnf -y install epel-release; \
     crb enable; \
     dnf -y update;
 
+FROM starter AS builder
+
 # Install build-time dependencies for linphone-desktop
 RUN dnf -y install \
       git diffutils cmake ninja-build meson \
       gcc gcc-c++ yasm nasm doxygen \
-      libv4l-devel glew-devel alsa-lib-devel libXext-devel \
-      qt6-qtbase-devel qt6-qtquick3d-devel qt6-qtmultimedia-devel qt6-qtshadertools-devel qt6-qtnetworkauth-devel qt6-qtlanguageserver-devel qt6-qttools-devel qt6-qtsvg-devel qt6-linguist \
+      libv4l-devel glew-devel alsa-lib-devel libXext-devel sqlite-devel libjpeg-turbo-devel \
+      qt6-qtbase-devel qt6-qtquick3d-devel qt6-qtmultimedia-devel qt6-qtshadertools-devel \
+      qt6-qtnetworkauth-devel qt6-qtlanguageserver-devel qt6-qttools-devel qt6-qtsvg-devel qt6-linguist \
       python3 python3-pip python3-six; \
     pip install pystache;
 
 # Clone the whole repo. Retries automatically
-RUN until git clone https://gitlab.linphone.org/BC/public/linphone-desktop.git /build; do sleep 5; done;
-RUN cd /build; until git submodule update --init --recursive; do sleep 5; done;
+RUN until git clone https://gitlab.linphone.org/BC/public/linphone-desktop.git --depth 1 --branch 6.0.1-CallEdition /build; do sleep 5; done;
+WORKDIR /build
+RUN until git submodule update --init --recursive; do sleep 5; done;
 
 # Force cmake to use Qt6 6.9.X (may break on newer versions)
-RUN cd /build/linphone-desktop; \
-    sed -i 's/^if(${Qt6_VERSION} VERSION_LESS "6.10.0")$/^if(${Qt6_VERSION} VERSION_LESS "6.9.0") # Was 6.10.0$/';
+RUN sed -i 's/^if(${Qt6_VERSION} VERSION_LESS "6.10.0")$/if(${Qt6_VERSION} VERSION_LESS "6.9.0") # Was 6.10.0/' Linphone/CMakeLists.txt;
+
+RUN mkdir /build/build
+WORKDIR /build/build
 
 # Build configuration
-RUN mkdir /build/linphone-desktop/build; \
-    cd /build/linphone-desktop/build; \
-    cmake .. -DENABLE_GPL_THIRD_PARTIES=YES -DENABLE_ALSA=YES -DENABLE_VIDEO=YES -DCMAKE_BUILD_PARALLEL_LEVEL=$(nproc) -DCMAKE_BUILD_TYPE=RelWithDebInfo -B .;
+RUN cmake .. -DENABLE_GPL_THIRD_PARTIES=YES -DENABLE_ALSA=YES -DENABLE_VIDEO=YES -DCMAKE_BUILD_PARALLEL_LEVEL=$(nproc) -DCMAKE_BUILD_TYPE=RelWithDebInfo -B .;
 
 # Compilation and general cleanup
 RUN cmake --build . --parallel $(nproc) --config RelWithDebInfo; \
     cmake --install .;
 
-# Package extraction (WIP)
-RUN cp -rv OUTPUT/bin OUTPUT/lib64 OUTPUT/share /result; \
-    rm -rv /result/lib64/pkgconfig /result/lib64/cmake;
-CMD ["sh"]
+# Package extraction
+RUN mkdir /result; \
+    cp -rv OUTPUT/bin OUTPUT/lib64 OUTPUT/share /result; \
+    rm -rv /result/lib64/pkgconfig /result/lib64/cmake /result/share/*/cmake;
+
+FROM scratch AS final
+
+COPY --from=builder /result /
+
+# Runtime dependencies (not provided in package)
+RUN echo '-----------------------------------------------------------' \
+    echo 'To install runtime dependencies, run the following as root:' \
+    echo 'dnf -y install \\' \
+    echo '  libX11 libGLEW libXext \\' \
+    echo '  qt6-qtdeclarative qt6-qtbase-gui qt6-qtbase qt6-qtsvg qt6-qtmultimedia qt6-qtnetworkauth \\' \
+    echo '  libglvnd-glx libglvnd-opengl alsa-lib pulseaudio-libs libv4l'
+
+ENTRYPOINT ["/bin/linphone6"]
