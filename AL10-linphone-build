@@ -42,16 +42,17 @@ RUN mkdir /result; \
     cp -rv OUTPUT/bin OUTPUT/lib64 OUTPUT/share /result; \
     rm -rv /result/lib64/pkgconfig /result/lib64/cmake /result/share/*/cmake;
 
+# Runtime dependencies (not provided in package)
+RUN echo; \
+    echo '---------------------------------------------------------------------------------------------'; \
+    echo 'To install runtime dependencies, run the following as root:'; \
+    echo 'dnf -y install \\'; \
+    echo '  libX11 libGLEW libXext \\'; \
+    echo '  qt6-qtdeclarative qt6-qtbase-gui qt6-qtbase qt6-qtsvg qt6-qtmultimedia qt6-qtnetworkauth \\'; \
+    echo '  libglvnd-glx libglvnd-opengl alsa-lib pulseaudio-libs libv4l';
+
 FROM scratch AS final
 
 COPY --from=builder /result /
-
-# Runtime dependencies (not provided in package)
-RUN echo '-----------------------------------------------------------' \
-    echo 'To install runtime dependencies, run the following as root:' \
-    echo 'dnf -y install \\' \
-    echo '  libX11 libGLEW libXext \\' \
-    echo '  qt6-qtdeclarative qt6-qtbase-gui qt6-qtbase qt6-qtsvg qt6-qtmultimedia qt6-qtnetworkauth \\' \
-    echo '  libglvnd-glx libglvnd-opengl alsa-lib pulseaudio-libs libv4l'
 
 ENTRYPOINT ["/bin/linphone6"]
