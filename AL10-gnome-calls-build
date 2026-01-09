@@ -1,0 +1,72 @@
+# Run the following to get a tar file in ./gnome-calls-build-result.tar with just the required files (minus runtime deps)
+# $ podman build -f AL10-gnome-calls-build . -o type=tar,dest=./gnome-calls-build-result.tar
+FROM almalinux:10.1 AS builder
+
+# Enable required repos
+RUN dnf -y install epel-release; \
+    crb enable; \
+    dnf -y update;
+
+FROM starter AS builder
+
+# Install build-time dependencies for gnome-calls
+RUN dnf -y install \
+      git meson ninja-build cmake gcc gcc-c++ desktop-file-utils pkgconf-pkg-config vala intltool \
+      python3-docutils python3-jinja2 python3-pygments python3-typogrify \
+      mobile-broadband-provider-info-devel libphonenumber-devel ModemManager-glib-devel ModemManager-devel \
+      systemd-devel librsvg2-devel libsecret-devel libxml2-devel evolution-data-server-devel libgee-devel jbigkit-devel liblerc-devel \
+      protobuf-devel abseil-cpp-devel libical-devel libical-glib-devel alsa-lib-devel pulseaudio-libs-devel libunistring-devel \
+      gstreamer1-devel gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+      libadwaita-devel gtk4-devel xorg-x11-xauth xorg-x11-server-Xvfb;
+
+RUN mkdir -p /build/subprojects; \
+    git config set --global advice.detachedHead false;
+
+COPY meson.build /build/meson.build
+
+# Using meson wrap files is also possible if this breaks
+# This also clones libcall-ui as it is vendored on a gnome-calls submodule
+WORKDIR /build/subprojects
+RUN git clone https://github.com/GNOME/calls --branch v49.1.1 --depth 1 --recursive calls; \
+    git clone https://github.com/GNOME/libpeas --branch 2.2.0 --depth 1 --recursive libpeas; \
+    git clone https://github.com/GNOME/folks --branch 0.15.9 --depth 1 --recursive folks; \
+    git clone https://github.com/GNOME/gom --branch 0.5.5 --depth 1 --recursive gom; \
+    git clone https://gitlab.gnome.org/World/Phosh/gmobile.git --branch v0.6.0 --depth 1 --recursive gmobile; \
+    git clone https://gitlab.com/mobian1/callaudiod.git --branch 0.1.99 --depth 1 --recursive callaudiod; \
+    git clone https://gitlab.freedesktop.org/agx/feedbackd.git --branch v0.8.8 --recursive feedbackd; \
+    until git clone https://gitlab.linphone.org/BC/public/external/sofia-sip.git --branch bc-flexisip-release/2.5 --depth 1 --recursive sofia-sip; do sleep 5; done;
+
+# Build sofia-sip. Obtaining a static library from this is important
+WORKDIR /build/subprojects/sofia-sip
+RUN sh autogen.sh; \
+    ./configure CFLAGS="-Wno-int-conversion -Wno-incompatible-pointer-types"; \
+    make -j$(nproc); \
+    make install;
+
+# Sit back and relax while the stars align to build everything else (thanks meson)
+WORKDIR /build
+RUN PKG_CONFIG_PATH=/usr/local/lib/pkgconfig meson setup BUILD/ -Dc_link_args='-Wl,-rpath,$ORIGIN/../lib64:$ORIGIN/../../../../../lib64'; \
+    meson compile -C BUILD; \
+    meson install -C BUILD --destdir OUTPUT; \
+    glib-compile-schemas BUILD/OUTPUT/share/glib-2.0/schemas; \
+    gtk4-update-icon-cache -q -t -f BUILD/OUTPUT/share/icons/hicolor; \
+    update-desktop-database -q BUILD/OUTPUT/share/applications;
+
+# Package extraction
+WORKDIR /build/BUILD/OUTPUT
+RUN mkdir -p /result/lib64; \
+    cp -rv bin etc share usr/lib /result; \
+    cp -rv lib64/*.so* lib64/calls lib64/folks lib64/girepository* /result/lib64;
+
+# Runtime dependencies (not provided in package)
+RUN echo; \
+    echo '---------------------------------------------------------------------------------------------'; \
+    echo 'To install runtime dependencies, run the following as root:'; \
+    echo 'dnf -y install \'; \
+    echo '  libadwaita evolution-data-server libgee \'; \
+    echo '  gstreamer1 gstreamer1-plugins-good gstreamer1-plugins-bad-free \'; \
+    echo '  gtk4 ModemManager-glib libsecret desktop-file-utils';
+
+FROM scratch AS final
+COPY --from=builder /result /
+ENTRYPOINT ["/bin/gnome-calls"]
