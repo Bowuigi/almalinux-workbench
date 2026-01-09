@@ -3,7 +3,7 @@
 FROM almalinux:10.1 AS builder
 
 # Enable required repos
-RUN dnf -y install epel-release; \
+RUN dnf -y install epel-release almalinux-release-devel; \
     crb enable; \
     dnf -y update;
 
