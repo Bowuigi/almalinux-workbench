@@ -7,8 +7,6 @@ RUN dnf -y install epel-release; \
     crb enable; \
     dnf -y update;
 
-FROM starter AS builder
-
 # Install build-time dependencies for gnome-calls
 RUN dnf -y install \
       git meson ninja-build cmake gcc gcc-c++ desktop-file-utils pkgconf-pkg-config vala intltool \
